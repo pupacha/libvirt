@@ -36,6 +36,8 @@ struct _virCHDomainObjPrivate {
     virBitmap *autoCpuset;
     virBitmap *autoNodeset;
     virCgroup *cgroup;
+    size_t tapfdSize;
+    int *tapfd;
 };
 
 #define CH_DOMAIN_PRIVATE(vm) \
@@ -74,4 +76,4 @@ char *
 virCHDomainGetMachineName(virDomainObj *vm);
 
 virDomainObj *
-virCHDomainObjFromDomain(virDomainPtr domain);
+virCHDomainObjFromDomain(virDomain *domain);

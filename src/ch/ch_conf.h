@@ -23,6 +23,7 @@
 #include "virdomainobjlist.h"
 #include "virthread.h"
 #include "object_event.h"
+#include "virebtables.h"
 
 #define CH_DRIVER_NAME "CH"
 #define CH_CMD "cloud-hypervisor"
@@ -41,6 +42,7 @@ struct _virCHDriverConfig {
 
     uid_t user;
     gid_t group;
+    bool macFilter;
 };
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(virCHDriverConfig, virObjectUnref);
@@ -70,6 +72,9 @@ struct _virCHDriver
 
     /* Immutable pointer, self-locking APIs */
     virObjectEventState *domainEventState;
+
+    /* Immutable pointer, lockless APIs. Pointless abstraction */
+    ebtablesContext *ebtables;
 
     /* pid file FD, ensures two copies of the driver can't use the same root */
     int lockFD;
