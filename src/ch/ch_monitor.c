@@ -392,7 +392,7 @@ virCHMonitorBuildNetJson(virDomainObj *vm, virJSONValue *nets, virDomainNetDef *
         }
     }
     if (netdef->driver.virtio.queues) {
-        if (virJSONValueObjectAppendNumberInt(net, "num_queues", netdef->driver.virtio.queues) < 0)
+        if (virJSONValueObjectAppendNumberInt(net, "num_queues", 2 * priv->tapfdSize) < 0)
             return -1;
     }
 
