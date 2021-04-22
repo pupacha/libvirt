@@ -585,6 +585,10 @@ virCHProcessStart(virCHDriver *driver,
     if (chProcessNetworkPrepareDevices(driver, vm) < 0)
         goto cleanup;
 
+    /* Bring up netdevs before starting CPUs */
+    if (chInterfaceStartDevices(vm->def) < 0)
+       return -1;
+
     if (!priv->monitor) {
         /* And we can get the first monitor connection now too */
         if (!(priv->monitor = virCHProcessConnectMonitor(driver, vm))) {
