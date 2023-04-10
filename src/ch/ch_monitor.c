@@ -107,6 +107,37 @@ virCHMonitorBuildPTYJson(virJSONValue *content, virDomainDef *vmdef)
 }
 
 static int
+virCHMonitorBuildPayloadJson(virJSONValue *content, virDomainDef *vmdef)
+{
+    g_autoptr(virJSONValue) payload = virJSONValueNewObject();
+
+
+    if (vmdef->os.kernel == NULL) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("Kernel image path in this domain is not defined"));
+        return -1;
+    } else {
+        if (virJSONValueObjectAppendString(payload, "kernel", vmdef->os.kernel) < 0)
+            return -1;
+    }
+
+    if (vmdef->os.cmdline) {
+        if (virJSONValueObjectAppendString(payload, "cmdline", vmdef->os.cmdline) < 0)
+            return -1;
+    }
+
+    if (vmdef->os.initrd != NULL) {
+        if (virJSONValueObjectAppendString(payload, "initramfs", vmdef->os.initrd) < 0)
+            return -1;
+    }
+
+    if (virJSONValueObjectAppend(content, "payload", &payload) < 0)
+    return -1;
+
+    return 0;
+}
+
+/* static int
 virCHMonitorBuildKernelRelatedJson(virJSONValue *content, virDomainDef *vmdef)
 {
     g_autoptr(virJSONValue) kernel = virJSONValueNewObject();
@@ -139,7 +170,7 @@ virCHMonitorBuildKernelRelatedJson(virJSONValue *content, virDomainDef *vmdef)
     }
 
     return 0;
-}
+}*/
 
 static int
 virCHMonitorBuildMemoryJson(virJSONValue *content, virDomainDef *vmdef)
@@ -446,7 +477,10 @@ virCHMonitorBuildVMJson(virDomainDef *vmdef,
     if (virCHMonitorBuildMemoryJson(content, vmdef) < 0)
         return -1;
 
-    if (virCHMonitorBuildKernelRelatedJson(content, vmdef) < 0)
+    /*if (virCHMonitorBuildKernelRelatedJson(content, vmdef) < 0)
+        return -1;*/
+
+    if (virCHMonitorBuildPayloadJson(content, vmdef) < 0)
         return -1;
 
     if (virCHMonitorBuildDisksJson(content, vmdef) < 0)
