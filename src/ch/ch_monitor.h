@@ -89,7 +89,7 @@ struct _virCHMonitor {
     CURL *handle;
 
     char *socketpath;
-
+    char *pidfile;
     pid_t pid;
 
     virDomainObj *vm;

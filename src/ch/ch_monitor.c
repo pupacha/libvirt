@@ -32,6 +32,8 @@
 #include "virjson.h"
 #include "virlog.h"
 #include "virstring.h"
+#include "virpidfile.h"
+
 
 #define VIR_FROM_THIS VIR_FROM_CH
 
@@ -584,6 +586,9 @@ virCHMonitorNew(virDomainObj *vm, const char *socketdir)
     }
 
     cmd = virCommandNew(vm->def->emulator);
+    mon->pidfile = virPidFileBuildPath(socketdir, vm->def->name);
+    virCommandSetPidFile(cmd, mon->pidfile);
+    virCommandDaemonize(cmd);
     virCommandSetUmask(cmd, 0x002);
     socket_fd = chMonitorCreateSocket(mon->socketpath);
     if (socket_fd < 0) {
@@ -598,9 +603,15 @@ virCHMonitorNew(virDomainObj *vm, const char *socketdir)
     virCommandPassFD(cmd, socket_fd, VIR_COMMAND_PASS_FD_CLOSE_PARENT);
 
     /* launch Cloud-Hypervisor socket */
-    if (virCommandRunAsync(cmd, &mon->pid) < 0)
+    if (virCommandRun(cmd, NULL) < 0)
         return NULL;
-
+    //if (virCommandRunAsync(cmd, &mon->pid) < 0)
+    //    return NULL;
+     if (virPidFileReadPath(mon->pidfile, &mon->pid) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Failed to read PID file"));
+        return NULL;
+    }
     /* get a curl handle */
     mon->handle = curl_easy_init();
 
@@ -639,6 +650,13 @@ void virCHMonitorClose(virCHMonitor *mon)
                      mon->socketpath);
         }
         g_free(mon->socketpath);
+    }
+    if (mon->pidfile) {
+        if (virFileRemove(mon->pidfile, -1, -1) < 0) {
+            VIR_WARN("Unable to remove CH PID file '%s'",
+                     mon->pidfile);
+        }
+        g_free(mon->pidfile);
     }
 
     virObjectUnref(mon);
