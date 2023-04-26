@@ -855,10 +855,12 @@ chDomainOpenConsole(virDomainPtr dom,
           }
      } else {
           if (vm->def->nconsoles &&
-              vm->def->consoles[0]->source->type == VIR_DOMAIN_CHR_TYPE_PTY)
+              (vm->def->consoles[0]->source->type == VIR_DOMAIN_CHR_TYPE_PTY ||
+               vm->def->consoles[0]->source->type == VIR_DOMAIN_CHR_TYPE_UNIX) )
                chr = vm->def->consoles[0];
           else if (vm->def->nserials &&
-                   vm->def->serials[0]->source->type == VIR_DOMAIN_CHR_TYPE_PTY)
+                   (vm->def->serials[0]->source->type == VIR_DOMAIN_CHR_TYPE_PTY ||
+                   vm->def->serials[0]->source->type == VIR_DOMAIN_CHR_TYPE_UNIX) )
                chr = vm->def->serials[0];
      }
 
@@ -868,9 +870,9 @@ chDomainOpenConsole(virDomainPtr dom,
           goto cleanup;
      }
 
-     if (chr->source->type != VIR_DOMAIN_CHR_TYPE_PTY) {
+     if (chr->source->type != VIR_DOMAIN_CHR_TYPE_PTY && chr->source->type != VIR_DOMAIN_CHR_TYPE_UNIX ) {
           virReportError(VIR_ERR_INTERNAL_ERROR,
-                         _("character device %1$s is not using a PTY"),
+                         _("character device %1$s is not using a PTY/UNIX"),
                          dev_name ? dev_name : NULLSTR(chr->info.alias));
           goto cleanup;
      }

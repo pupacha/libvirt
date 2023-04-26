@@ -87,22 +87,43 @@ virCHMonitorBuildCPUJson(virJSONValue *content, virDomainDef *vmdef)
 }
 
 static int
-virCHMonitorBuildPTYJson(virJSONValue *content, virDomainDef *vmdef)
+virCHMonitorBuildConsoleJson(virJSONValue *content, virDomainDef *vmdef)
 {
+g_autoptr(virJSONValue) console = virJSONValueNewObject();
+g_autoptr(virJSONValue) serial = virJSONValueNewObject();
+
     if (vmdef->nconsoles) {
-        g_autoptr(virJSONValue) pty = virJSONValueNewObject();
-        if (virJSONValueObjectAppendString(pty, "mode", "Pty") < 0)
+        if (vmdef->consoles[0]->source->type == VIR_DOMAIN_CHR_TYPE_PTY) {
+        if (virJSONValueObjectAppendString(console, "mode", "Pty") < 0)
             return -1;
-        if (virJSONValueObjectAppend(content, "console", &pty) < 0)
+        if (virJSONValueObjectAppend(content, "console", &console) < 0)
             return -1;
+        }
+        else if (vmdef->consoles[0]->source->type == VIR_DOMAIN_CHR_TYPE_UNIX) {
+        if (virJSONValueObjectAppendString(console, "mode", "File") < 0)
+            return -1;
+        if (virJSONValueObjectAppendString(console, "file", vmdef->consoles[0]->source->data.file.path) < 0)
+            return -1;
+        if (virJSONValueObjectAppend(content, "console", &console) < 0)
+            return -1;
+        }
     }
 
     if (vmdef->nserials) {
-        g_autoptr(virJSONValue) pty = virJSONValueNewObject();
-        if (virJSONValueObjectAppendString(pty, "mode", "Pty") < 0)
+        if (vmdef->serials[0]->source->type == VIR_DOMAIN_CHR_TYPE_PTY) {
+        if (virJSONValueObjectAppendString(serial, "mode", "Pty") < 0)
             return -1;
-        if (virJSONValueObjectAppend(content, "serial", &pty) < 0)
+        if (virJSONValueObjectAppend(content, "serial", &serial) < 0)
             return -1;
+        }
+        else if (vmdef->serials[0]->source->type == VIR_DOMAIN_CHR_TYPE_UNIX) {
+        if (virJSONValueObjectAppendString(serial, "mode", "File") < 0)
+            return -1;
+        if (virJSONValueObjectAppendString(serial, "file", vmdef->serials[0]->source->data.file.path) < 0)
+            return -1;
+        if (virJSONValueObjectAppend(content, "serial", &serial) < 0)
+            return -1;
+        }
     }
 
     return 0;
@@ -470,7 +491,7 @@ virCHMonitorBuildVMJson(virDomainDef *vmdef,
         return -1;
     }
 
-    if (virCHMonitorBuildPTYJson(content, vmdef) < 0)
+    if (virCHMonitorBuildConsoleJson(content, vmdef) < 0)
         return -1;
 
     if (virCHMonitorBuildCPUJson(content, vmdef) < 0)
