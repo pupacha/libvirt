@@ -91,10 +91,13 @@ virCHMonitorBuildCPUJson(virJSONValue *content, virDomainDef *vmdef)
 }
 
 static int
-virCHMonitorBuildConsoleJson(virJSONValue *content, virDomainDef *vmdef)
+virCHMonitorBuildConsoleJson(virJSONValue *content,
+                virDomainDef *vmdef)
 {
 g_autoptr(virJSONValue) console = virJSONValueNewObject();
 g_autoptr(virJSONValue) serial = virJSONValueNewObject();
+
+
 
     if (vmdef->nconsoles) {
         if (vmdef->consoles[0]->source->type == VIR_DOMAIN_CHR_TYPE_PTY) {
@@ -104,9 +107,9 @@ g_autoptr(virJSONValue) serial = virJSONValueNewObject();
             return -1;
         }
         else if (vmdef->consoles[0]->source->type == VIR_DOMAIN_CHR_TYPE_UNIX) {
-        if (virJSONValueObjectAppendString(console, "mode", "File") < 0)
+        if (virJSONValueObjectAppendString(console, "mode", "Unix") < 0)
             return -1;
-        if (virJSONValueObjectAppendString(console, "file", vmdef->consoles[0]->source->data.file.path) < 0)
+        if (virJSONValueObjectAppendString(console, "unix", vmdef->consoles[0]->source->data.file.path) < 0)
             return -1;
         if (virJSONValueObjectAppend(content, "console", &console) < 0)
             return -1;
@@ -121,9 +124,9 @@ g_autoptr(virJSONValue) serial = virJSONValueNewObject();
             return -1;
         }
         else if (vmdef->serials[0]->source->type == VIR_DOMAIN_CHR_TYPE_UNIX) {
-        if (virJSONValueObjectAppendString(serial, "mode", "File") < 0)
+        if (virJSONValueObjectAppendString(serial, "mode", "Unix") < 0)
             return -1;
-        if (virJSONValueObjectAppendString(serial, "file", vmdef->serials[0]->source->data.file.path) < 0)
+        if (virJSONValueObjectAppendString(serial, "unix", vmdef->serials[0]->source->data.file.path) < 0)
             return -1;
         if (virJSONValueObjectAppend(content, "serial", &serial) < 0)
             return -1;

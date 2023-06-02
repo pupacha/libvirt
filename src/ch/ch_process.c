@@ -33,6 +33,7 @@
 #include "virjson.h"
 #include "virlog.h"
 
+
 #define VIR_FROM_THIS VIR_FROM_CH
 
 VIR_LOG_INIT("ch.ch_process");
@@ -64,6 +65,8 @@ virCHProcessUpdateConsoleDevice(virDomainObj *vm,
     virJSONValue *dev, *file;
 
     if (!config)
+        return;
+    if (STREQ(device, "serial") && (vm->def->serials[0]->source->type == VIR_DOMAIN_CHR_TYPE_UNIX))
         return;
 
     dev = virJSONValueObjectGet(config, device);
@@ -449,6 +452,7 @@ virCHProcessSetupVcpus(virDomainObj *vm)
 
     return 0;
 }
+
 
 /**
  * chProcessNetworkPrepareDevices
