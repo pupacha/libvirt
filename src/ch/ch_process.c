@@ -51,7 +51,7 @@ virCHProcessConnectMonitor(virCHDriver *driver,
     virCHMonitor *monitor = NULL;
     virCHDriverConfig *cfg = virCHDriverGetConfig(driver);
 
-    monitor = virCHMonitorNew(vm, cfg->stateDir);
+    monitor = virCHMonitorNew(vm, cfg);
 
     virObjectUnref(cfg);
     return monitor;
@@ -453,6 +453,34 @@ virCHProcessSetupVcpus(virDomainObj *vm)
     return 0;
 }
 
+static int
+virCHProcessSetup(virDomainObj *vm)
+{
+    virCHDomainObjPrivate *priv = vm->privateData;
+
+    virCHDomainRefreshThreadInfo(vm);
+
+    VIR_DEBUG("Setting emulator tuning/settings");
+    if (virCHProcessSetupEmulatorThreads(vm) < 0)
+        return -1;
+
+    VIR_DEBUG("Setting iothread tuning/settings");
+    if (virCHProcessSetupIOThreads(vm) < 0)
+        return -1;
+
+    VIR_DEBUG("Setting global CPU cgroup (if required)");
+    if (virDomainCgroupSetupGlobalCpuCgroup(vm,
+                                            priv->cgroup) < 0)
+        return -1;
+
+    VIR_DEBUG("Setting vCPU tuning/settings");
+    if (virCHProcessSetupVcpus(vm) < 0)
+        return -1;
+
+    virCHProcessUpdateInfo(vm);
+    return 0;
+}
+
 
 #define PKT_TIMEOUT_MS 500 /* ms */
 
@@ -707,26 +735,9 @@ virCHProcessStart(virCHDriver *driver,
         goto cleanup;
     }
 
-    virCHDomainRefreshThreadInfo(vm);
-
-    VIR_DEBUG("Setting emulator tuning/settings");
-    if (virCHProcessSetupEmulatorThreads(vm) < 0)
+    if (virCHProcessSetup(vm) < 0)
         goto cleanup;
 
-    VIR_DEBUG("Setting iothread tuning/settings");
-    if (virCHProcessSetupIOThreads(vm) < 0)
-        goto cleanup;
-
-    VIR_DEBUG("Setting global CPU cgroup (if required)");
-    if (virDomainCgroupSetupGlobalCpuCgroup(vm,
-                                            priv->cgroup) < 0)
-        goto cleanup;
-
-    VIR_DEBUG("Setting vCPU tuning/settings");
-    if (virCHProcessSetupVcpus(vm) < 0)
-        goto cleanup;
-
-    virCHProcessUpdateInfo(vm);
     virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, reason);
 
     return 0;
@@ -782,6 +793,58 @@ virCHProcessStop(virCHDriver *driver G_GNUC_UNUSED,
     g_clear_pointer(&priv->machineName, g_free);
 
     virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF, reason);
+
+    return 0;
+}
+
+/**
+ * virCHProcessStartRestore:
+ * @driver: pointer to driver structure
+ * @vm: pointer to virtual machine structure
+ * @from: directory path to restore the VM from
+ *
+ * Starts Cloud-Hypervisor process with the restored VM
+ *
+ * Returns 0 on success or -1 in case of error
+ */
+int
+virCHProcessStartRestore(virCHDriver *driver, virDomainObj *vm, const char *from)
+{
+    virCHDomainObjPrivate *priv = vm->privateData;
+    g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(priv->driver);
+
+    if (!priv->monitor) {
+        /* Get the first monitor connection if not already */
+        if (!(priv->monitor = virCHProcessConnectMonitor(driver, vm))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("failed to create connection to CH socket"));
+            return -1;
+        }
+    }
+
+    vm->pid = priv->monitor->pid;
+    vm->def->id = vm->pid;
+    priv->machineName = virCHDomainGetMachineName(vm);
+
+    if (virCHMonitorRestoreVM(priv->monitor, from) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("failed to restore domain"));
+        return -1;
+    }
+
+    if (virDomainCgroupSetupCgroup("ch", vm,
+                                   0, NULL, /* nnicindexes, nicindexes */
+                                   &priv->cgroup,
+                                   cfg->cgroupControllers,
+                                   0, /*maxThreadsPerProc*/
+                                   priv->driver->privileged,
+                                   priv->machineName) < 0)
+        return -1;
+
+    if (virCHProcessSetup(vm) < 0)
+        return -1;
+
+    virDomainObjSetState(vm, VIR_DOMAIN_PAUSED, VIR_DOMAIN_PAUSED_FROM_SNAPSHOT);
 
     return 0;
 }
