@@ -23,6 +23,12 @@ v10.1.0 (unreleased)
     Additionally, if CPU clusters are present in the host topology, they will
     be reported as part of the capabilities XML.
 
+  * ch: Basic save and restore support for ch driver
+
+      The ch driver now supports basic save and restore operations. This is functional
+      on domains without any network, host device config defined. The `path` parameter
+      for save and restore should be a directory.
+
 * **Improvements**
 
 * **Bug fixes**
