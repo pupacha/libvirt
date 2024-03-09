@@ -139,10 +139,12 @@ virCHDriverConfigNew(bool privileged)
     if (privileged) {
         cfg->logDir = g_strdup_printf("%s/log/libvirt/ch", LOCALSTATEDIR);
         cfg->stateDir = g_strdup_printf("%s/libvirt/ch", RUNSTATEDIR);
+        cfg->saveDir = g_strdup_printf("%s/lib/libvirt/ch/save", LOCALSTATEDIR);
 
     } else {
         g_autofree char *rundir = NULL;
         g_autofree char *cachedir = NULL;
+        g_autofree char *configbasedir = NULL;
 
         cachedir = virGetUserCacheDirectory();
 
@@ -150,6 +152,9 @@ virCHDriverConfigNew(bool privileged)
 
         rundir = virGetUserRuntimeDirectory();
         cfg->stateDir = g_strdup_printf("%s/ch/run", rundir);
+
+        configbasedir = virGetUserConfigDirectory();
+        cfg->saveDir = g_strdup_printf("%s/ch/save", configbasedir);
     }
 
     return cfg;
@@ -166,6 +171,7 @@ virCHDriverConfigDispose(void *obj)
 {
     virCHDriverConfig *cfg = obj;
 
+    g_free(cfg->saveDir);
     g_free(cfg->stateDir);
     g_free(cfg->logDir);
 }
