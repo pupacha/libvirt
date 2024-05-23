@@ -490,7 +490,7 @@ virCHProcessSetup(virDomainObj *vm)
 }
 
 
-#define PKT_TIMEOUT_MS 500 /* ms */
+#define PKT_TIMEOUT_MS 19500 /* ms */
 
 static char *
 chSocketRecv(int sock)
@@ -499,6 +499,7 @@ chSocketRecv(int sock)
     char *buf = NULL;
     size_t buf_len = 1024;
     int ret;
+    int count=0;
 
     buf = g_new0(char, buf_len);
 
@@ -507,7 +508,9 @@ chSocketRecv(int sock)
 
     do {
         ret = poll(pfds, G_N_ELEMENTS(pfds), PKT_TIMEOUT_MS);
+        count++;
     } while (ret < 0 && errno == EINTR);
+    VIR_ERROR("poll count = %d, ret=%d", count, ret);
 
     if (ret <= 0) {
         if (ret < 0) {
@@ -869,6 +872,15 @@ virCHProcessStartRestore(virCHDriver *driver, virDomainObj *vm, const char *from
 {
     virCHDomainObjPrivate *priv = vm->privateData;
     g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(priv->driver);
+    VIR_AUTOCLOSE mon_sockfd = -1;
+    struct sockaddr_un server_addr;
+    g_auto(virBuffer) buf = VIR_BUFFER_INITIALIZER;
+    g_auto(virBuffer) http_headers = VIR_BUFFER_INITIALIZER;
+    g_autofree char *payload = NULL;
+    g_autofree char *response = NULL;
+    size_t payload_len;
+    int http_res;
+    int rc;
 
     if (!priv->monitor) {
         /* Get the first monitor connection if not already */
@@ -883,11 +895,73 @@ virCHProcessStartRestore(virCHDriver *driver, virDomainObj *vm, const char *from
     vm->def->id = vm->pid;
     priv->machineName = virCHDomainGetMachineName(vm);
 
-    if (virCHMonitorRestoreVM(priv->monitor, from) < 0) {
+    if (virCHMonitorBuildRestoreJson(from, &payload) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                       _("failed to restore domain"));
+                        _("Failed to build restore json"));
+    }
+
+    VIR_ERROR("payload sent with restore request to CH = %s", payload);
+
+    virBufferAddLit(&http_headers, "PUT /api/v1/vm.restore HTTP/1.1\r\n");
+    virBufferAddLit(&http_headers, "Host: localhost\r\n");
+    virBufferAddLit(&http_headers, "Content-Type: application/json\r\n");
+
+    virBufferAsprintf(&buf, "%s", virBufferCurrentContent(&http_headers));
+    virBufferAsprintf(&buf, "Content-Length: %ld\r\n\r\n", strlen(payload));
+    virBufferAsprintf(&buf, "%s", payload);
+    payload_len = virBufferUse(&buf);
+    payload = virBufferContentAndReset(&buf);
+
+    mon_sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (mon_sockfd < 0) {
+        virReportSystemError(errno, "%s", _("Failed to open a UNIX socket"));
         return -1;
     }
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sun_family = AF_UNIX;
+    if (virStrcpyStatic(server_addr.sun_path, priv->monitor->socketpath) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("UNIX socket path '%1$s' too long"), priv->monitor->socketpath);
+        return -1;
+    }
+
+    if (connect(mon_sockfd, (struct sockaddr *)&server_addr,
+                sizeof(server_addr)) == -1) {
+        virReportSystemError(errno, "%s", _("Failed to connect to mon socket"));
+        return -1;
+    }
+
+    if (virSocketSendMsgWithFDs(mon_sockfd, payload, payload_len, NULL, 0) < 0) {
+        virReportSystemError(errno, "%s",
+                             _("Failed to send restore request to CH"));
+        return -1;
+    }
+
+    /* Process the response from CH */
+    response = chSocketRecv(mon_sockfd);
+    if (response == NULL) {
+        return -1;
+    }
+
+    /* Parse the HTTP response code */
+    rc = sscanf(response, "HTTP/1.%*d %d", &http_res);
+    if (rc != 1) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                        _("Failed to parse HTTP response code"));
+        return -1;
+    }
+    if (http_res != 204 && http_res != 200) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                        _("Unexpected response from CH: %1$s"), response);
+        return -1;
+    }
+
+    // if (virCHMonitorRestoreVM(priv->monitor, from) < 0) {
+    //     virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+    //                    _("failed to restore domain"));
+    //     return -1;
+    // }
 
     /* Pass 0, NULL as restore only works without networking support */
     if (virDomainCgroupSetupCgroup("ch", vm,

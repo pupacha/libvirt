@@ -686,11 +686,11 @@ chDomainSaveAdditionalValidation(virDomainDef *vmdef)
     SAVE and RESTORE are functional only without any networking and
     device passthrough configuration
     */
-    if (vmdef->nnets > 0) {
-        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
-                       _("cannot save domain with network interfaces"));
-        return -1;
-    }
+    // if (vmdef->nnets > 0) {
+    //     virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+    //                    _("cannot save domain with network interfaces"));
+    //     return -1;
+    // }
     if  (vmdef->nhostdevs > 0) {
         virReportError(VIR_ERR_OPERATION_INVALID, "%s",
                        _("cannot save domain with host devices"));
