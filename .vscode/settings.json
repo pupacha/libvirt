@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "system_error": "c",
+        "algorithm": "c",
+        "random": "cpp"
+    }
+}
