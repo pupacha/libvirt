@@ -530,9 +530,6 @@ chMonitorSocketConnect(virCHMonitor *mon)
     return -1;
 }
 
-
-#define PKT_TIMEOUT_MS 500 /* ms */
-
 static char *
 chSocketRecv(int sock)
 {
@@ -547,7 +544,7 @@ chSocketRecv(int sock)
     pfds[0].events = POLLIN;
 
     do {
-        ret = poll(pfds, G_N_ELEMENTS(pfds), PKT_TIMEOUT_MS);
+        ret = poll(pfds, G_N_ELEMENTS(pfds), -1);
     } while (ret < 0 && errno == EINTR);
 
     if (ret <= 0) {
@@ -570,8 +567,6 @@ chSocketRecv(int sock)
 
     return g_steal_pointer(&buf);
 }
-
-#undef PKT_TIMEOUT_MS
 
 static int
 chSocketProcessHttpResponse(int sock)
