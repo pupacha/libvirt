@@ -127,4 +127,4 @@ int virCHMonitorGetIOThreads(virCHMonitor *mon,
                              virDomainIOThreadInfo ***iothreads);
 int
 virCHMonitorBuildNetJson(virDomainNetDef *netdef, int netindex, char **jsonstr);
-int virCHMonitorBuildRestoreJson(const char *from, char **jsonstr);
+int virCHMonitorBuildRestoreJson(virDomainDef *vmdef, const char *from, char **jsonstr);
