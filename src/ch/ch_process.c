@@ -1031,5 +1031,7 @@ virCHProcessStartRestore(virCHDriver *driver, virDomainObj *vm, const char *from
  cleanup:
     if (tapfds)
         chCloseFDs(tapfds, ntapfds);
+    if (ret)
+        virCHProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_FAILED);
     return ret;
 }
