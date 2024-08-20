@@ -540,7 +540,6 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
 {
     g_autoptr(virCHMonitor) mon = NULL;
     g_autoptr(virCommand) cmd = NULL;
-    const char *socketdir = cfg->stateDir;
     int socket_fd = 0;
 
     if (virCHMonitorInitialize() < 0)
@@ -556,11 +555,12 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
     }
 
     /* prepare to launch Cloud-Hypervisor socket */
-    mon->socketpath = g_strdup_printf("%s/%s-socket", socketdir, vm->def->name);
-    if (g_mkdir_with_parents(socketdir, 0777) < 0) {
+    mon->socketpath = g_strdup_printf("%s/%s-socket", cfg->stateDir, vm->def->name);
+    mon->monitorpath = g_strdup_printf("%s/%s-monitor", cfg->stateDir, vm->def->name);
+    if (g_mkdir_with_parents(cfg->stateDir, 0777) < 0) {
         virReportSystemError(errno,
                              _("Cannot create socket directory '%1$s'"),
-                             socketdir);
+                             cfg->stateDir);
         return NULL;
     }
 
@@ -584,6 +584,9 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
     virCommandAddArg(cmd, "--api-socket");
     virCommandAddArgFormat(cmd, "fd=%d", socket_fd);
     virCommandPassFD(cmd, socket_fd, VIR_COMMAND_PASS_FD_CLOSE_PARENT);
+
+    virCommandAddArg(cmd, "--event-monitor");
+    virCommandAddArgFormat(cmd, "path=%s", mon->monitorpath);
 
     /* launch Cloud-Hypervisor socket */
     if (virCommandRunAsync(cmd, &mon->pid) < 0)
@@ -627,6 +630,14 @@ void virCHMonitorClose(virCHMonitor *mon)
                      mon->socketpath);
         }
         g_free(mon->socketpath);
+    }
+
+    if (mon->monitorpath) {
+        if (virFileRemove(mon->monitorpath, -1, -1) < 0) {
+            VIR_WARN("Unable to remove CH monitor file '%s'",
+                     mon->monitorpath);
+        }
+        g_free(mon->monitorpath);
     }
 
     virObjectUnref(mon);
