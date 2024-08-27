@@ -28,8 +28,10 @@
 
 #include "datatypes.h"
 #include "ch_conf.h"
+#include "ch_domain.h"
 #include "ch_interface.h"
 #include "ch_monitor.h"
+#include "ch_process.h"
 #include "domain_interface.h"
 #include "viralloc.h"
 #include "vircommand.h"
@@ -652,13 +654,28 @@ static int virCHMonitorValidateEventsJSON(virCHMonitor *mon,
     return events;
 }
 
-static int virCHMonitorProcessEvent(virJSONValue *eventJSON)
+static int virCHMonitorProcessStop(virDomainObj *vm,
+                                   virDomainShutoffReason reason)
+{
+    virCHDriver *driver =  ((virCHDomainObjPrivate *)vm->privateData)->driver;
+
+    if (virDomainObjBeginJob(vm, VIR_JOB_MODIFY))
+        return -1;
+    virCHProcessStop(driver, vm, reason);
+    virDomainObjEndJob(vm);
+
+    return 0;
+}
+
+static int virCHMonitorProcessEvent(virCHMonitor *mon,
+                                    virJSONValue *eventJSON)
 {
     const char *event;
     const char *source;
     virCHMonitorEvent ev;
     g_autofree char *timestamp = NULL;
     g_autofree char *full_event = NULL;
+    virDomainObj *vm = mon->vm;
 
     if (virJSONValueObjectHasKey(eventJSON, "source") == 0) {
         VIR_WARN("Invalid JSON from monitor, no source key");
@@ -682,6 +699,19 @@ static int virCHMonitorProcessEvent(virJSONValue *eventJSON)
         case virCHMonitorVirtioDeviceEventReset:
         case virCHMonitorVmmEventShutdown:
         case virCHMonitorVmEventShutdown:
+            {
+                virDomainState state;
+                virObjectLock(vm);
+                state = virDomainObjGetState(vm, NULL);
+                if ((ev == virCHMonitorVmmEventShutdown ||
+                     state == VIR_DOMAIN_SHUTDOWN)) {
+                    if (virCHMonitorProcessStop(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN))
+                        VIR_WARN("Failed to mark the VM(%s) as SHUTDOWN!",
+                                vm->def->name);
+                }
+                virObjectUnlock(vm);
+                break;
+            }
         case virCHMonitorVmEventBooting:
         case virCHMonitorVmEventPausing:
         case virCHMonitorVmEventPaused:
@@ -761,7 +791,7 @@ static int virCHMonitorProcessEvents(virCHMonitor *mon, int events)
         }
 
         if ((obj = virJSONValueFromString(buf))) {
-            if (virCHMonitorProcessEvent(obj) < 0) {
+            if (virCHMonitorProcessEvent(mon, obj) < 0) {
                 VIR_WARN("Failed to process the event!");
                 ret = -1;
             }
