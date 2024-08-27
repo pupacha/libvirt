@@ -86,6 +86,39 @@ struct _virCHMonitorThreadInfo {
     };
 };
 
+typedef enum {
+    /* source: vmm */
+    virCHMonitorVmmEventStarting = 0,
+    virCHMonitorVmmEventShutdown,
+
+    /* source: vm */
+    virCHMonitorVmEventBooting,
+    virCHMonitorVmEventBooted,
+    virCHMonitorVmEventPausing,
+    virCHMonitorVmEventPaused,
+    virCHMonitorVmEventResuming,
+    virCHMonitorVmEventResumed,
+    virCHMonitorVmEventSnapshotting,
+    virCHMonitorVmEventSnapshotted,
+    virCHMonitorVmEventRestoring,
+    virCHMonitorVmEventRestored,
+    virCHMonitorVmEventResizing,
+    virCHMonitorVmEventResized,
+    virCHMonitorVmEventShutdown,
+    virCHMonitorVmEventDeleted,
+
+    /* source: cpu_manager */
+    virCHMonitorCpuCreateVcpu,
+
+    /* source: virtio-device */
+    virCHMonitorVirtioDeviceEventActivated,
+    virCHMonitorVirtioDeviceEventReset,
+
+    virCHMonitorEventLast
+} virCHMonitorEvent;
+
+VIR_ENUM_DECL(virCHMonitorEvent);
+
 /*
  * Size of the buffer used to read the
  * monitor events. Hard coded to max

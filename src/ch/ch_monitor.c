@@ -41,6 +41,29 @@
 
 #define VIR_FROM_THIS VIR_FROM_CH
 
+VIR_ENUM_IMPL(virCHMonitorEvent,
+              virCHMonitorEventLast,
+              "vmm:starting",
+              "vmm:shutdown",
+              "vm:booting",
+              "vm:booted",
+              "vm:pausing",
+              "vm:paused",
+              "vm:resuming",
+              "vm:resumed",
+              "vm:snapshotting",
+              "vm:snapshotted",
+              "vm:restoring",
+              "vm:restored",
+              "vm:resizing",
+              "vm:resized",
+              "vm:shutdown",
+              "vm:deleted",
+              "cpu_manager:create_vcpu",
+              "virtio-device:activated",
+              "virtio-device:reset"
+);
+
 VIR_LOG_INIT("ch.ch_monitor");
 
 static virClass *virCHMonitorClass;
@@ -629,6 +652,58 @@ static int virCHMonitorValidateEventsJSON(virCHMonitor *mon,
     return events;
 }
 
+static int virCHMonitorProcessEvent(virJSONValue *eventJSON)
+{
+    const char *event;
+    const char *source;
+    virCHMonitorEvent ev;
+    g_autofree char *timestamp = NULL;
+    g_autofree char *full_event = NULL;
+
+    if (virJSONValueObjectHasKey(eventJSON, "source") == 0) {
+        VIR_WARN("Invalid JSON from monitor, no source key");
+        return -1;
+    }
+    if (virJSONValueObjectHasKey(eventJSON, "event") == 0) {
+        VIR_WARN("Invalid JSON from monitor, no event key");
+        return -1;
+    }
+    source = virJSONValueObjectGetString(eventJSON, "source");
+    event = virJSONValueObjectGetString(eventJSON, "event");
+    full_event = g_strdup_printf("%s:%s", source, event);
+    ev = virCHMonitorEventTypeFromString(full_event);
+    VIR_WARN("Source: %s Event: %s, ev: %d", source, event, ev);
+
+    switch (ev) {
+        case virCHMonitorVmEventBooted:
+        case virCHMonitorVmEventResumed:
+        case virCHMonitorVmEventRestored:
+        case virCHMonitorVirtioDeviceEventActivated:
+        case virCHMonitorVirtioDeviceEventReset:
+        case virCHMonitorVmmEventShutdown:
+        case virCHMonitorVmEventShutdown:
+        case virCHMonitorVmEventBooting:
+        case virCHMonitorVmEventPausing:
+        case virCHMonitorVmEventPaused:
+        case virCHMonitorVmEventResuming:
+        case virCHMonitorVmEventSnapshotting:
+        case virCHMonitorVmEventSnapshotted:
+        case virCHMonitorVmEventRestoring:
+        case virCHMonitorVmEventResizing:
+        case virCHMonitorVmEventResized:
+        case virCHMonitorVmEventDeleted:
+        case virCHMonitorVmmEventStarting:
+        case virCHMonitorCpuCreateVcpu:
+            break;
+        case virCHMonitorEventLast:
+        default:
+            VIR_WARN("unkown event from monitor!");
+            break;
+    }
+
+    return 0;
+}
+
 static int virCHMonitorProcessEvents(virCHMonitor *mon, int events)
 {
     ssize_t sz = mon->buf_fill_sz;
@@ -686,7 +761,10 @@ static int virCHMonitorProcessEvents(virCHMonitor *mon, int events)
         }
 
         if ((obj = virJSONValueFromString(buf))) {
-            // Handle processing events
+            if (virCHMonitorProcessEvent(obj) < 0) {
+                VIR_WARN("Failed to process the event!");
+                ret = -1;
+            }
             virJSONValueFree(obj);
         } else {
             VIR_WARN("Invalid JSON from monitor");
@@ -970,7 +1048,7 @@ void virCHMonitorClose(virCHMonitor *mon)
 
     if (mon->monitorpath) {
         if (virFileRemove(mon->monitorpath, -1, -1) < 0) {
-            VIR_WARN("Unable to remove CH monitor file '%s'",
+            VIR_WARN("Unable to remove CH monitor file '%s'`",
                      mon->monitorpath);
         }
         g_free(mon->monitorpath);
