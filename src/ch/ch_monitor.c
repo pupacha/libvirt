@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <curl/curl.h>
+#include <assert.h>
+#include <fcntl.h>
 
 #include "datatypes.h"
 #include "ch_conf.h"
@@ -535,6 +537,314 @@ chMonitorCreateSocket(const char *socket_path)
     return -1;
 }
 
+/*
+ * Helper function to find a block of valid JSON
+ * from a stream of multiple JSON blocks.
+ */
+static inline char *end_of_json(char *str, size_t len)
+{
+    bool started = false;
+    int blocks = 0;
+    size_t i = 0;
+
+    while ((i < len) && (!started || blocks > 0)) {
+        if (str[i] == '{') {
+            if (!started)
+                started = true;
+            blocks++;
+        } else if (str[i] == '}') {
+            blocks--;
+        }
+        i++;
+    }
+
+    return (i == len && blocks) ? NULL : str + i;
+}
+
+static int virCHMonitorValidateEventsJSON(virCHMonitor *mon,
+            bool *incomplete)
+{
+    /*
+     * Marks the start of a JSON doc(starting with '{')
+     */
+    char *json_start = mon->buffer;
+    /*
+     * Marks the start of the buffer where the scan starts.
+     * It could be either:
+     *      - Start of the buffer. Or
+     *      - Next location after a valid JSON doc.
+     */
+    char *scan_start = mon->buffer;
+    size_t sz = mon->buf_fill_sz;
+    int blocks = 0;
+    int events = 0;
+    size_t i = 0;
+
+    if (sz == 0)
+        return 0;
+
+    /*
+     * Check if the message is a wellformed JSON. Try to find all
+     * wellformed JSON doc and adjust the buffer accordingly by
+     * removing invalid snippets in the buffer.
+     */
+    do {
+        if (mon->buffer[i] == '{') {
+            blocks++;
+
+            if (blocks != 1)
+                continue;
+
+            /*
+             * Possible start of a valid JSON doc. Check if
+             * there were any white characters or garbage
+             * before the JSON doc at this location.
+             */
+            json_start = mon->buffer + i;
+            if (scan_start != json_start) {
+                int invalid_chars = json_start - scan_start;
+                VIR_WARN("invalid json or white chars in buffer: %.*s",
+                         invalid_chars, scan_start);
+                memmove(scan_start, json_start, sz - i);
+                memset(scan_start + sz - i, 0, invalid_chars);
+                i -= invalid_chars;
+                sz -= invalid_chars;
+            }
+        } else if (mon->buffer[i] == '}' && blocks != 0) {
+            blocks--;
+            if (blocks == 0) {
+                events++;
+                /*
+                 * This location marks the end of a valid JSON doc.
+                 * Reset the scan_start to next location.
+                 */
+                scan_start = mon->buffer + i + 1;
+            }
+        }
+    } while (++i < sz);
+
+    *incomplete = blocks != 0 ? true : false;
+    mon->buf_fill_sz = sz;
+
+    return events;
+}
+
+static int virCHMonitorProcessEvents(virCHMonitor *mon, int events)
+{
+    ssize_t sz = mon->buf_fill_sz;
+    virJSONValue *obj = NULL;
+    char *buf = mon->buffer;
+    int ret = 0;
+    size_t i = 0;
+
+    for (i = 0; i < events; i++) {
+        char tmp;
+        char *end = end_of_json(buf, sz);
+
+        /*
+         * end should never be NULL! We validated that there
+         * is a valid JSON document before calling end_of_json,
+         * and end_of_json returns NULL only if it cannot find
+         * a valid JSON document.
+         */
+        assert(end);
+        assert(end <= buf + sz);
+
+        /*
+         * We may hit a corner case where a valid JSON
+         * doc happens to end right at the end of the buffer.
+         * virJSONValueFromString needs '\0' end the JSON doc.
+         * So we need to adjust the buffer accordingly.
+         */
+        if (end == mon->buffer + CH_MONITOR_BUFFER_SZ) {
+            if (buf == mon->buffer) {
+                /*
+                 * We have a valid JSON doc same as the buffer
+                 * size. As per protocol, max JSON doc should be
+                 * less than the buffer size. So this is an error.
+                 * Ignore this JSON doc.
+                 */
+                VIR_WARN("Invalid JSON doc size. Expected <= %d"
+                         ", actual %lu", CH_MONITOR_BUFFER_SZ, end - buf);
+                buf = end;
+                sz = 0;
+                break;
+            }
+
+            /*
+             * Move the valid JSON doc to the start of the buffer so
+             * that we can safely fit a '\0' at the end.
+             * Since end == mon->buffer + CH_MONITOR_BUFFER_SZ,
+             *  sz == end - buf
+             */
+            memmove(mon->buffer, buf, sz);
+            end = mon->buffer + sz;
+            buf = mon->buffer;
+            *end = tmp = 0;
+        } else {
+            tmp = *end, *end = 0;
+        }
+
+        if ((obj = virJSONValueFromString(buf))) {
+            // Handle processing events
+            virJSONValueFree(obj);
+        } else {
+            VIR_WARN("Invalid JSON from monitor");
+            ret = -1;
+        }
+
+        sz -= end - buf;
+        assert(sz >= 0);
+        *end = tmp;
+        buf = end;
+    }
+
+    /*
+     * If the buffer still has incomplete data, lets
+     * push it to the beginning.
+     */
+    if (sz > 0) {
+        mon->buf_offset = sz;
+        memmove(mon->buffer, buf, sz);
+    } else {
+        mon->buf_offset = 0;
+    }
+
+    return ret;
+}
+
+static int virCHMonitorReadProcessEvents(virCHMonitor *mon,
+                                         int monitor_fd)
+{
+    size_t max_sz = CH_MONITOR_BUFFER_SZ - mon->buf_offset;
+    char *buf = mon->buffer + mon->buf_offset;
+    virDomainObj *vm = mon->vm;
+    bool incomplete = false;
+    int events = 0;
+    size_t sz = 0;
+
+    memset(buf, 0, max_sz);
+    do {
+        ssize_t ret;
+
+        ret = read(monitor_fd, buf + sz, max_sz - sz);
+        if (ret == 0 || (ret < 0 && errno == EINTR)) {
+            g_usleep(G_USEC_PER_SEC);
+            continue;
+        } else if (ret < 0) {
+            /*
+             * We should never reach here. read(2) says possible errors
+             * are EINTR, EAGAIN, EBADF, EFAULT, EINVAL, EIO, EISDIR
+             * We handle EINTR gracefully. There is some serious issue
+             * if we encounter any of the other errors(either in our code
+             * or in the system). Better to bail out.
+             */
+            VIR_ERROR(_("Failed to read monitor events!: %1$s"), g_strerror(errno));
+            VIR_FORCE_CLOSE(monitor_fd);
+            abort();
+        }
+
+        sz += ret;
+        mon->buf_fill_sz = sz + mon->buf_offset;
+        events = virCHMonitorValidateEventsJSON(mon, &incomplete);
+        VIR_DEBUG("Monitor event(size: %lu, events: %d, incomplete: %d):\n%s",
+                  mon->buf_fill_sz, events, incomplete, mon->buffer);
+
+    } while (virDomainObjIsActive(vm) && (sz < max_sz) &&
+             (events == 0 || incomplete));
+
+    /*
+     * We process the events from the read buffer if
+     *    - There is atleast one event in the buffer
+     *    - No incomplete events in the buffer or
+     *    - The buffer is full and may have incomplete entries.
+     *
+     * If the buffer is full, virCHMonitorProcessEvents processes
+     * the completed events in the buffer and moves incomplete
+     * entries to the start of the buffer and next read from the pipe
+     * starts from the offset.
+     */
+    return (events > 0) ? virCHMonitorProcessEvents(mon, events) : events;
+}
+
+static void virCHMonitorEventLoop(void *data)
+{
+    virCHMonitor *mon = data;
+    virDomainObj *vm = NULL;
+    int monitor_fd;
+
+    VIR_DEBUG("Monitor event loop thread starting");
+
+    while ((monitor_fd = open(mon->monitorpath, O_RDONLY)) < 0) {
+        if (errno == EINTR) {
+            g_usleep(100000); // 100 milli seconds
+            continue;
+        }
+        /*
+         * Any other error should be a BUG(kernel/libc/libvirtd)
+         * (ENOMEM can happen on exceeding per-user limits)
+         */
+        VIR_ERROR(_("Failed to open the monitor FIFO(%1$s) read end!"),
+                  mon->monitorpath);
+        abort();
+    }
+    VIR_DEBUG("Opened the monitor FIFO(%s)", mon->monitorpath);
+
+    mon->buffer = g_malloc_n(sizeof(char), CH_MONITOR_BUFFER_SZ);
+    mon->buf_offset = 0;
+    mon->buf_fill_sz = 0;
+
+    /*
+     * We would need to wait until VM is initialized.
+     */
+    while (!(vm = virObjectRef(mon->vm)))
+        g_usleep(100000);   // 100 milli seconds
+
+    while (g_atomic_int_get(&mon->event_loop_stop) == 0) {
+        VIR_DEBUG("Reading events from monitor..");
+        /*
+         * virCHMonitorReadProcessEvents errors out only if
+         * virjson detects an invalid JSON doc and the buffer
+         * in that case is automatically taken care of. We can
+         * safely continue.
+         */
+        if (virCHMonitorReadProcessEvents(mon, monitor_fd) < 0)
+            VIR_WARN("Failed to process events from monitor!");
+    }
+
+    VIR_FORCE_CLOSE(monitor_fd);
+    virObjectUnref(vm);
+
+    VIR_DEBUG("Monitor event loop thread exiting");
+    return;
+}
+
+static int virCHMonitorStartEventLoop(virCHMonitor *mon)
+{
+    g_autofree char *name = NULL;
+    name = g_strdup_printf("mon-events-%d", mon->pid);
+
+    virObjectRef(mon);
+    if (virThreadCreateFull(&mon->event_loop_thread,
+                            false,
+                            virCHMonitorEventLoop,
+                            name,
+                            false,
+                            mon) < 0) {
+        virObjectUnref(mon);
+        return -1;
+    }
+    virObjectUnref(mon);
+
+    g_atomic_int_set(&mon->event_loop_stop, 0);
+    return 0;
+}
+
+static void virCHMonitorStopEventLoop(virCHMonitor *mon)
+{
+    g_atomic_int_set(&mon->event_loop_stop, 1);
+}
+
 virCHMonitor *
 virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
 {
@@ -556,7 +866,6 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
 
     /* prepare to launch Cloud-Hypervisor socket */
     mon->socketpath = g_strdup_printf("%s/%s-socket", cfg->stateDir, vm->def->name);
-    mon->monitorpath = g_strdup_printf("%s/%s-monitor", cfg->stateDir, vm->def->name);
     if (g_mkdir_with_parents(cfg->stateDir, 0777) < 0) {
         virReportSystemError(errno,
                              _("Cannot create socket directory '%1$s'"),
@@ -568,6 +877,30 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
         virReportSystemError(errno,
                              _("Cannot create save directory '%1$s'"),
                              cfg->saveDir);
+        return NULL;
+    }
+
+    /* Monitor fd to listen for VM state changes */
+    mon->monitorpath = g_strdup_printf("%s/%s-monitor-fifo",
+                                       cfg->stateDir, vm->def->name);
+    if (virFileExists(mon->monitorpath)) {
+        /**
+         * && !virFileIsNamedPipe(mon->monitorpath)) {
+         * VIR_WARN("Monitor file (%s) is not a FIFO, trying to delete!",
+         * mon->monitorpath);
+        */
+        if (virFileRemove(mon->monitorpath, -1, -1) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("Failed to remove the file: %1$s"),
+                           mon->monitorpath);
+            return NULL;
+        }
+    }
+
+    if (mkfifo(mon->monitorpath, S_IWUSR | S_IRUSR) < 0 &&
+            errno != EEXIST) {
+        virReportSystemError(errno, "%s",
+                             _("Cannot create monitor FIFO"));
         return NULL;
     }
 
@@ -590,6 +923,9 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
 
     /* launch Cloud-Hypervisor socket */
     if (virCommandRunAsync(cmd, &mon->pid) < 0)
+        return NULL;
+
+    if (virCHMonitorStartEventLoop(mon) < 0)
         return NULL;
 
     /* get a curl handle */
@@ -639,6 +975,8 @@ void virCHMonitorClose(virCHMonitor *mon)
         }
         g_free(mon->monitorpath);
     }
+
+    virCHMonitorStopEventLoop(mon);
 
     virObjectUnref(mon);
 }

@@ -86,6 +86,13 @@ struct _virCHMonitorThreadInfo {
     };
 };
 
+/*
+ * Size of the buffer used to read the
+ * monitor events. Hard coded to max
+ * size of the pipe.
+ */
+#define CH_MONITOR_BUFFER_SZ    PIPE_BUF
+
 typedef struct _virCHMonitor virCHMonitor;
 
 struct _virCHMonitor {
@@ -96,6 +103,16 @@ struct _virCHMonitor {
     char *socketpath;
 
     char *monitorpath;
+
+    // Buffer to hold the data read from pipe
+    char *buffer;
+    // Offset to which new data from pipe has to be read.
+    size_t buf_offset;
+    // Size of the data read from pipe in buffer
+    size_t buf_fill_sz;
+
+    virThread event_loop_thread;
+    int event_loop_stop;
 
     pid_t pid;
 
