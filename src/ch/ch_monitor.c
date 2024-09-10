@@ -26,6 +26,7 @@
 
 #include "datatypes.h"
 #include "ch_conf.h"
+#include "ch_events.h"
 #include "ch_interface.h"
 #include "ch_monitor.h"
 #include "domain_interface.h"
@@ -556,7 +557,6 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
 
     /* prepare to launch Cloud-Hypervisor socket */
     mon->socketpath = g_strdup_printf("%s/%s-socket", cfg->stateDir, vm->def->name);
-    mon->monitorpath = g_strdup_printf("%s/%s-monitor", cfg->stateDir, vm->def->name);
     if (g_mkdir_with_parents(cfg->stateDir, 0777) < 0) {
         virReportSystemError(errno,
                              _("Cannot create socket directory '%1$s'"),
@@ -568,6 +568,30 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
         virReportSystemError(errno,
                              _("Cannot create save directory '%1$s'"),
                              cfg->saveDir);
+        return NULL;
+    }
+
+    /* Monitor file to listen for VM state changes */
+    mon->monitorpath = g_strdup_printf("%s/%s-monitor-fifo",
+                                       cfg->stateDir, vm->def->name);
+    if (virFileExists(mon->monitorpath)) {
+        /**
+         * && !virFileIsNamedPipe(mon->monitorpath)) {
+         * VIR_WARN("Monitor file (%s) is not a FIFO, trying to delete!",
+         * mon->monitorpath);
+        */
+        if (virFileRemove(mon->monitorpath, -1, -1) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("Failed to remove the file: %1$s"),
+                           mon->monitorpath);
+            return NULL;
+        }
+    }
+
+    if (mkfifo(mon->monitorpath, S_IWUSR | S_IRUSR) < 0 &&
+            errno != EEXIST) {
+        virReportSystemError(errno, "%s",
+                             _("Cannot create monitor FIFO"));
         return NULL;
     }
 
@@ -590,6 +614,9 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
 
     /* launch Cloud-Hypervisor socket */
     if (virCommandRunAsync(cmd, &mon->pid) < 0)
+        return NULL;
+
+    if (virCHStartEventMonitorLoop(mon) < 0)
         return NULL;
 
     /* get a curl handle */
@@ -639,6 +666,8 @@ void virCHMonitorClose(virCHMonitor *mon)
         }
         g_free(mon->monitorpath);
     }
+
+    virCHStopEventMonitorLoop(mon);
 
     virObjectUnref(mon);
 }

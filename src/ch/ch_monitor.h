@@ -97,6 +97,9 @@ struct _virCHMonitor {
 
     char *monitorpath;
 
+    virThread event_loop_thread;
+    int event_loop_stop;
+
     pid_t pid;
 
     virDomainObj *vm;
