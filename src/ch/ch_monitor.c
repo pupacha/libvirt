@@ -574,12 +574,10 @@ virCHMonitorNew(virDomainObj *vm, virCHDriverConfig *cfg)
     /* Monitor file to listen for VM state changes */
     mon->monitorpath = g_strdup_printf("%s/%s-monitor-fifo",
                                        cfg->stateDir, vm->def->name);
-    if (virFileExists(mon->monitorpath)) {
-        /**
-         * && !virFileIsNamedPipe(mon->monitorpath)) {
-         * VIR_WARN("Monitor file (%s) is not a FIFO, trying to delete!",
-         * mon->monitorpath);
-        */
+    if (virFileExists(mon->monitorpath)
+        && !virFileIsNamedPipe(mon->monitorpath)) {
+        VIR_WARN("Monitor file (%s) is not a FIFO, trying to delete!",
+        mon->monitorpath);
         if (virFileRemove(mon->monitorpath, -1, -1) < 0) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            _("Failed to remove the file: %1$s"),

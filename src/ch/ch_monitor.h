@@ -99,6 +99,12 @@ struct _virCHMonitor {
 
     virThread event_loop_thread;
     int event_loop_stop;
+    struct {
+        // Buffer to hold the data read from pipe
+        char *buffer;
+        // Size of the data read from pipe in buffer
+        size_t buf_fill_sz;
+    } event_buffer;
 
     pid_t pid;
 

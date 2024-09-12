@@ -22,5 +22,41 @@
 
 #include "ch_monitor.h"
 
+
+#define CH_EVENT_BUFFER_SZ PIPE_BUF
+
+typedef enum {
+    /* source: vmm */
+    virCHEventVmmStarting = 0,
+    virCHEventVmmShutdown,
+
+    /* source: vm */
+    virCHEventVmBooting,
+    virCHEventVmBooted,
+    virCHEventVmPausing,
+    virCHEventVmPaused,
+    virCHEventVmResuming,
+    virCHEventVmResumed,
+    virCHEventVmSnapshotting,
+    virCHEventVmSnapshotted,
+    virCHEventVmRestoring,
+    virCHEventVmRestored,
+    virCHEventVmResizing,
+    virCHEventVmResized,
+    virCHEventVmShutdown,
+    virCHEventVmDeleted,
+
+    /* source: cpu_manager */
+    virCHEventCpuCreateVcpu,
+
+    /* source: virtio-device */
+    virCHEventVirtioDeviceActivated,
+    virCHEventVirtioDeviceReset,
+
+    virCHEventLast
+} virCHEvent;
+
+VIR_ENUM_DECL(virCHEvent);
+
 int virCHStartEventMonitorLoop(virCHMonitor *mon);
 void virCHStopEventMonitorLoop(virCHMonitor *mon);
